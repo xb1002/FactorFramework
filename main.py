@@ -170,6 +170,13 @@ class FactorPipeline:
         print(f"   检测到 {len(all_factors)} 个因子，将处理 {len(factors_to_process)} 个")
         print()
         
+        # 收集所有因子需要的 horizons
+        all_horizons = set()
+        for factor_name in factors_to_process:
+            spec = get(factor_name)
+            all_horizons.update(spec.horizons)
+        all_horizons = sorted(all_horizons)
+        
         # 准备前瞻收益（一次性加载）
         print("🔄 准备前瞻收益...")
         try:
@@ -182,13 +189,12 @@ class FactorPipeline:
             print(f"   日期范围: {market_data.index.get_level_values('date').min()} 至 "
                   f"{market_data.index.get_level_values('date').max()}")
             
-            horizons = self.config["engine"]["default_horizons"]
             fwd_returns = build_forward_returns(
                 df=market_data,
-                horizons=horizons,
+                horizons=all_horizons,
                 price_col="close"
             )
-            print(f"   ✓ 已构建 {len(horizons)} 个窗口的前瞻收益")
+            print(f"   ✓ 已构建 {len(all_horizons)} 个窗口的前瞻收益: {all_horizons}")
             print()
         except Exception as e:
             print(f"   ✗ 构建前瞻收益失败: {e}")
@@ -256,6 +262,9 @@ class FactorPipeline:
         }
         
         try:
+            # 获取因子规范
+            spec = get(factor_name)
+            
             # 1. 计算因子值
             print("   🧮 计算因子值...")
             factor_values = self.engine.compute(
@@ -266,9 +275,10 @@ class FactorPipeline:
             )
             print(f"      ✓ 因子值数量: {len(factor_values):,}")
             
-            # 2. 评价因子
+            # 2. 评价因子（使用因子自己的 horizons）
             print("   🔍 评价因子表现...")
-            report = self.evaluator.evaluate(
+            factor_evaluator = FactorEvaluator(horizons=spec.horizons)
+            report = factor_evaluator.evaluate(
                 factor=factor_values,
                 fwd_returns=fwd_returns,
                 universe_mask=universe_mask
