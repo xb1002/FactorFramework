@@ -2,3 +2,5 @@ data/
 .venv/
 __pycache__/
 *.pyc
+factor_results/
+factor_store/

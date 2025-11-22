@@ -86,19 +86,19 @@ class FactorLibrary:
 
         meta_path = self._meta_path(spec.name, spec.version)
         self._ensure_paths(meta_path)
-        with meta_path.open("w") as f:
-            json.dump(spec.to_dict(), f, indent=2)
+        with meta_path.open("w", encoding="utf-8") as f:
+            json.dump(spec.to_dict(), f, indent=2, ensure_ascii=False)
 
         if report is not None:
             report_path = self._report_path(spec.name, spec.version)
             self._ensure_paths(report_path)
-            with report_path.open("w") as f:
-                json.dump(report, f, indent=2)
+            with report_path.open("w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
 
         expr_path = self._expr_path(spec.name, spec.version)
         self._ensure_paths(expr_path)
         if spec.expr:
-            expr_path.write_text(spec.expr)
+            expr_path.write_text(spec.expr, encoding="utf-8")
         return str(factor_dir)
 
     def _resolve_version(self, factor: str, version: Optional[str]) -> str:
@@ -160,5 +160,5 @@ class FactorLibrary:
         """
         resolved_version = self._resolve_version(factor, version)
         path = self._report_path(factor, resolved_version)
-        with path.open() as f:
+        with path.open(encoding="utf-8") as f:
             return json.load(f)
