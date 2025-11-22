@@ -197,7 +197,8 @@ class FactorEvaluator:
     def _best_horizon(self, metrics: Dict[int, HorizonMetrics]) -> Optional[int]:
         """选择最佳时间窗口。
         
-        按 Rank IC 均值选择表现最好的窗口。
+        按 Rank IC 绝对值均值选择表现最好的窗口。
+        负 IC 的因子同样有价值（可以反向使用）。
         
         Args:
             metrics: 各窗口的指标字典
@@ -207,4 +208,4 @@ class FactorEvaluator:
         """
         if not metrics:
             return None
-        return max(metrics.items(), key=lambda kv: kv[1].rank_ic_mean)[0]
+        return max(metrics.items(), key=lambda kv: abs(kv[1].rank_ic_mean))[0]

@@ -30,24 +30,27 @@ class ICThresholdRule(AdmissionRule):
     """IC 阈值规则。
     
     要求至少一个时间窗口同时满足最小 IC 和 ICIR 要求。
+    使用绝对值判断，因为负相关因子（反向因子）同样有价值。
     
     Attributes:
-        min_ic: 最小平均 Rank IC
-        min_icir: 最小信息比率
+        min_ic: 最小平均 Rank IC（绝对值）
+        min_icir: 最小信息比率（绝对值）
     """
     
     def __init__(self, min_ic: float, min_icir: float) -> None:
         """初始化 IC 阈值规则。
         
         Args:
-            min_ic: 最小 IC 要求
-            min_icir: 最小 ICIR 要求
+            min_ic: 最小 IC 绝对值要求
+            min_icir: 最小 ICIR 绝对值要求
         """
         self.min_ic = min_ic
         self.min_icir = min_icir
 
     def check(self, report: FactorReport) -> tuple[bool, str]:
         """检查是否满足 IC 阈值。
+        
+        使用绝对值比较，允许负 IC 因子通过（反向因子）。
         
         Args:
             report: 因子评价报告
@@ -56,8 +59,8 @@ class ICThresholdRule(AdmissionRule):
             (是否通过, 说明) 元组
         """
         for h, metrics in report.metrics.items():
-            if metrics.rank_ic_mean >= self.min_ic and metrics.icir >= self.min_icir:
-                return True, f"horizon {h} passed IC thresholds"
+            if abs(metrics.rank_ic_mean) >= self.min_ic and abs(metrics.icir) >= self.min_icir:
+                return True, f"horizon {h} passed IC thresholds (IC={metrics.rank_ic_mean:.4f}, ICIR={metrics.icir:.4f})"
         return False, "No horizon meets IC thresholds"
 
 
