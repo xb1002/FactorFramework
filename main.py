@@ -4,23 +4,30 @@
 一键执行完整的因子研究流程：
 1. 加载配置和数据
 2. 导入因子定义（自动注册）
-3. 批量计算因子
+3. 批量计算因子（自动跳过已评价的因子）
 4. 评价因子表现
 5. 判断是否入库
 6. 保存到因子库
+7. 记录评价历史（包括未通过的因子）
 
 用法：
-    # 默认模式：仅评价，不入库
+    # 默认模式：评价并入库，跳过已评价的因子
     python main.py
-    
-    # 评价并入库通过的因子
-    python main.py --mode admit
     
     # 指定日期范围
     python main.py --start 2022-01-01 --end 2023-12-31
     
     # 仅处理指定因子
     python main.py --factors momentum_20d volatility_20d
+    
+    # 强制重新评价指定因子
+    python main.py --force momentum_20d volatility_20d
+    
+    # 强制重新评价所有因子
+    python main.py --force-all
+    
+    # 不跳过已评价的因子（等同于 --force-all）
+    python main.py --no-skip
     
     # 覆盖入库阈值
     python main.py --mode admit --min-ic 0.03 --min-icir 0.5
@@ -46,6 +53,7 @@ from project.evaluation.admission import (
 )
 from project.evaluation.evaluator import FactorEvaluator, FactorReport
 from project.evaluation.forward_return import build as build_forward_returns
+from project.evaluation.history import EvaluationHistory
 from project.factors.engine import FactorEngine
 from project.factors.library import FactorLibrary
 from project.factors.registry import get, list_all
@@ -116,6 +124,10 @@ class FactorPipeline:
         library_root = self.config["library"]["root"]
         self.library = FactorLibrary(root=library_root)
         print(f"   因子库: {library_root}")
+        
+        # 评价历史记录
+        self.history = EvaluationHistory("factor_evaluation_history.json")
+        print(f"   评价历史: factor_evaluation_history.json")
         print()
         
     def run(
@@ -123,7 +135,9 @@ class FactorPipeline:
         start: str,
         end: str,
         mode: str = "admit",
-        factor_names: Optional[List[str]] = None
+        factor_names: Optional[List[str]] = None,
+        skip_evaluated: bool = True,
+        force_factors: Optional[List[str]] = None
     ) -> pd.DataFrame:
         """运行因子全流程
         
@@ -132,6 +146,8 @@ class FactorPipeline:
             end: 结束日期 (YYYY-MM-DD)
             mode: 运行模式 ("evaluate" 或 "admit")
             factor_names: 指定因子列表（None 表示全部）
+            skip_evaluated: 是否跳过已评价的因子（默认 True）
+            force_factors: 强制重新评价的因子列表（即使已评价过）
             
         Returns:
             结果汇总 DataFrame
@@ -144,6 +160,7 @@ class FactorPipeline:
         print("=" * 80)
         print(f"日期范围: {start} 至 {end}")
         print(f"运行模式: {mode.upper()}")
+        print(f"跳过已评价: {'是' if skip_evaluated else '否'}")
         print()
         
         # 导入因子定义（触发注册）
@@ -166,6 +183,41 @@ class FactorPipeline:
             factors_to_process = factor_names
         else:
             factors_to_process = all_factors
+        
+        # 打印评价历史摘要
+        self.history.print_summary()
+        print()
+        
+        # 过滤已评价的因子
+        if skip_evaluated:
+            force_set = set(force_factors or [])
+            original_count = len(factors_to_process)
+            
+            # 将强制重评价的因子从历史中移除
+            for factor_name in force_set:
+                if self.history.remove_record(factor_name):
+                    print(f"   🔄 强制重新评价: {factor_name}")
+            
+            # 过滤掉已评价的因子（除了强制重评价的）
+            skipped = []
+            factors_to_process_new = []
+            for factor_name in factors_to_process:
+                if factor_name in force_set:
+                    factors_to_process_new.append(factor_name)
+                elif self.history.is_evaluated(factor_name):
+                    skipped.append(factor_name)
+                    record = self.history.get_record(factor_name)
+                    print(f"   ⏭️  跳过 {factor_name} (已评价于 {record['last_evaluated']}，"
+                          f"{'✅通过' if record.get('passed') else '❌未通过'}）")
+                else:
+                    factors_to_process_new.append(factor_name)
+            
+            factors_to_process = factors_to_process_new
+            
+            if skipped:
+                print(f"\n   📊 已跳过 {len(skipped)} 个因子，剩余 {len(factors_to_process)} 个待评价")
+                print(f"   💡 提示: 使用 --force-all 重新评价所有因子，或 --force <因子名> 重新评价指定因子")
+            print()
         
         print(f"   检测到 {len(all_factors)} 个因子，将处理 {len(factors_to_process)} 个")
         print()
@@ -219,6 +271,20 @@ class FactorPipeline:
                 mode=mode
             )
             results.append(result)
+            
+            # 记录评价历史
+            date_range = f"{start} to {end}"
+            self.history.record_evaluation(
+                factor_name=factor_name,
+                status=result["status"],
+                date_range=date_range,
+                passed=result.get("passed"),
+                ic_mean=result.get("ic_mean"),
+                icir=result.get("icir"),
+                best_horizon=result.get("best_horizon"),
+                turnover=result.get("turnover"),
+                error=result.get("error")
+            )
             print()
         
         # 生成汇总报告
@@ -405,17 +471,23 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  # 默认模式：仅评价，不入库
+  # 默认模式：评价并入库，自动跳过已评价的因子
   python main.py
-  
-  # 评价并入库通过的因子
-  python main.py --mode admit
   
   # 指定日期范围
   python main.py --start 2022-01-01 --end 2023-12-31
   
   # 仅处理指定因子
   python main.py --factors momentum_20d volatility_20d
+  
+  # 强制重新评价指定因子（即使已评价过）
+  python main.py --force momentum_20d volatility_20d
+  
+  # 强制重新评价所有因子
+  python main.py --force-all
+  
+  # 不跳过已评价的因子（等同于 --force-all）
+  python main.py --no-skip
   
   # 覆盖入库阈值
   python main.py --mode admit --min-ic 0.03 --min-icir 0.5
@@ -450,6 +522,34 @@ def parse_args():
         nargs="+",
         default=None,
         help="指定要处理的因子名称列表，默认: 全部因子"
+    )
+    
+    parser.add_argument(
+        "--skip-evaluated",
+        action="store_true",
+        default=True,
+        help="跳过已评价的因子（默认启用）"
+    )
+    
+    parser.add_argument(
+        "--no-skip",
+        dest="skip_evaluated",
+        action="store_false",
+        help="不跳过已评价的因子，重新评价所有因子"
+    )
+    
+    parser.add_argument(
+        "--force",
+        type=str,
+        nargs="+",
+        default=None,
+        help="强制重新评价指定的因子（即使已评价过）"
+    )
+    
+    parser.add_argument(
+        "--force-all",
+        action="store_true",
+        help="强制重新评价所有因子（等同于 --no-skip）"
     )
     
     parser.add_argument(
@@ -521,11 +621,17 @@ def main():
     # 创建管道并运行
     try:
         pipeline = FactorPipeline(config)
+        
+        # 处理 --force-all 参数
+        skip_evaluated = args.skip_evaluated and not args.force_all
+        
         summary = pipeline.run(
             start=args.start,
             end=args.end,
             mode=args.mode,
-            factor_names=args.factors
+            factor_names=args.factors,
+            skip_evaluated=skip_evaluated,
+            force_factors=args.force
         )
         
         # 保存结果到文件
