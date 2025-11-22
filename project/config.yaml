@@ -1,5 +1,5 @@
 data:
-  processed_path: project/data/processed/market.parquet
+  processed_path: data/combined_data.csv
 
 engine:
   default_horizons: [1, 5, 10, 20]
