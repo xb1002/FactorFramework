@@ -1,0 +1,7 @@
+data/
+.venv/
+__pycache__/
+*.pyc
+factor_results/
+factor_store/
+factor_evaluation_history.json
