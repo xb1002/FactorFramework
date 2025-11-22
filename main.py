@@ -122,7 +122,7 @@ class FactorPipeline:
         self,
         start: str,
         end: str,
-        mode: str = "evaluate",
+        mode: str = "admit",
         factor_names: Optional[List[str]] = None
     ) -> pd.DataFrame:
         """运行因子全流程
@@ -430,8 +430,8 @@ def parse_args():
         "--mode",
         type=str,
         choices=["evaluate", "admit"],
-        default="evaluate",
-        help="运行模式: evaluate=仅评价, admit=评价并入库，默认: evaluate"
+        default="admit",
+        help="运行模式: evaluate=仅评价, admit=评价并入库，默认: admit"
     )
     
     parser.add_argument(
@@ -468,6 +468,13 @@ def parse_args():
         type=float,
         default=None,
         help="覆盖配置中的最大换手率阈值"
+    )
+    
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="factor_results",
+        help="结果输出目录，默认: factor_results/"
     )
     
     return parser.parse_args()
@@ -512,8 +519,11 @@ def main():
         )
         
         # 保存结果到文件
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = f"factor_results_{timestamp}.csv"
+        output_file = output_dir / f"factor_results_{timestamp}.csv"
         summary.to_csv(output_file, index=False, encoding="utf-8-sig")
         print(f"\n💾 结果已保存到: {output_file}")
         
