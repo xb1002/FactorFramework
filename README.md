@@ -59,7 +59,7 @@ import pandas as pd
     version="v1",
 )
 def return_5d(df: pd.DataFrame) -> pd.Series:
-    return df["close"].groupby(level=1).pct_change(5)
+    return df["close"].groupby(level="code").pct_change(5)
 ```
 > 因子函数必须是纯函数，不读取外部文件/网络，只使用传入的 DataFrame。
 

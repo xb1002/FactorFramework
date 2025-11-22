@@ -127,9 +127,9 @@ class LocalParquetSource(MarketDataSource):
             过滤后的 DataFrame
         """
         if start is not None:
-            df = df[df.index.get_level_values(0) >= pd.to_datetime(start)]
+            df = df[df.index.get_level_values("date") >= pd.to_datetime(start)]
         if end is not None:
-            df = df[df.index.get_level_values(0) <= pd.to_datetime(end)]
+            df = df[df.index.get_level_values("date") <= pd.to_datetime(end)]
         return df
 
     def _filter_fields(self, df: pd.DataFrame, fields: Optional[Iterable[str]]) -> pd.DataFrame:

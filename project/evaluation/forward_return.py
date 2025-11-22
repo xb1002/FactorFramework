@@ -31,7 +31,7 @@ def build(df: pd.DataFrame, horizons: Iterable[int], price_col: str = "close") -
     price = df[price_col]
     returns: Dict[int, pd.Series] = {}
     for h in horizons:
-        future = price.groupby(level=1).shift(-h)
+        future = price.groupby(level="code").shift(-h)
         ret = future / price - 1
         ret.name = f"fwd_ret_{h}"
         returns[h] = ret

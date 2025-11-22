@@ -314,7 +314,7 @@ class FactorEvaluator:
             平均换手率（0-1 之间）
         """
         sorted_codes = factor.groupby(level="date").apply(
-            lambda x: x.sort_values(ascending=False).index.get_level_values(1)
+            lambda x: x.sort_values(ascending=False).index.get_level_values("code")
         )
         turnovers = []
         previous = None
