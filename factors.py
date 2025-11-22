@@ -406,19 +406,18 @@ def kurtosis_20d(df: pd.DataFrame) -> pd.Series:
     version="v1"
 )
 def breakout_20d(df: pd.DataFrame) -> pd.Series:
-    """20日突破因子
+    # 1. 先在组内进行 shift，把 High 往后移一天
+    # 返回的是一个 Series，索引是 (date, code)
+    high_shifted = df["high"].groupby(level="code").shift(1)
     
-    判断当前价格是否突破过去20日高点。
-    理论：突破新高可能是趋势延续信号（Donchian通道）。
+    # 2. 对移位后的 Series *再次分组* 进行 rolling
+    # 这样才能保证 rolling 是在每个 code 内部进行的
+    high_20 = high_shifted.groupby(level="code").rolling(window=20).max()
     
-    Args:
-        df: 包含 close, high 列的 DataFrame
-        
-    Returns:
-        突破幅度 Series（0表示未突破，>0表示突破程度）
-    """
-    high_20 = df["high"].groupby(level="code").shift(1).rolling(window=20).max().droplevel(0)
-    # 突破幅度 = (当前价 - 20日最高) / 20日最高
+    # 3. 处理 groupby 产生的多级索引
+    # Groupby Rolling 通常会产生 (code, date, code) 的索引，我们需要去掉最外层的 code
+    high_20 = high_20.droplevel(0)
+    
     return (df["close"] - high_20) / high_20
 
 
