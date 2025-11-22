@@ -6,6 +6,87 @@ from typing import Dict, Iterable, Optional
 
 import numpy as np
 import pandas as pd
+from numba import jit, prange
+
+
+@jit(nopython=True, cache=True)
+def _rank_data_numba(x):
+    """使用 numba 优化的排序函数
+    
+    Args:
+        x: 输入数组
+        
+    Returns:
+        排序后的秩数组
+    """
+    n = len(x)
+    sorter = np.argsort(x)
+    inv = np.empty(n, dtype=np.intp)
+    inv[sorter] = np.arange(n)
+    ranks = inv.astype(np.float64) + 1
+    return ranks
+
+
+@jit(nopython=True, cache=True)
+def _spearman_numba(x, y):
+    """使用 numba 优化的 Spearman 相关系数计算
+    
+    Args:
+        x: 因子值数组
+        y: 收益率数组
+        
+    Returns:
+        Spearman 相关系数
+    """
+    if len(x) != len(y) or len(x) < 2:
+        return np.nan
+    
+    # 计算秩
+    rank_x = _rank_data_numba(x)
+    rank_y = _rank_data_numba(y)
+    
+    # 计算 Pearson 相关系数（秩的相关性即 Spearman）
+    mean_x = np.mean(rank_x)
+    mean_y = np.mean(rank_y)
+    
+    cov = np.sum((rank_x - mean_x) * (rank_y - mean_y))
+    std_x = np.sqrt(np.sum((rank_x - mean_x) ** 2))
+    std_y = np.sqrt(np.sum((rank_y - mean_y) ** 2))
+    
+    if std_x == 0 or std_y == 0:
+        return np.nan
+    
+    return cov / (std_x * std_y)
+
+
+@jit(nopython=True, cache=True, parallel=True)
+def _compute_ic_batch(factor_arr, fwd_arr, date_starts, date_ends):
+    """并行计算每个日期的 IC
+    
+    Args:
+        factor_arr: 因子值数组
+        fwd_arr: 前瞻收益数组
+        date_starts: 每个日期的起始索引数组
+        date_ends: 每个日期的结束索引数组
+        
+    Returns:
+        每个日期的 IC 数组
+    """
+    n_dates = len(date_starts)
+    ic_array = np.empty(n_dates, dtype=np.float64)
+    
+    for i in prange(n_dates):
+        start = date_starts[i]
+        end = date_ends[i]
+        if end - start < 2:
+            ic_array[i] = np.nan
+        else:
+            ic_array[i] = _spearman_numba(
+                factor_arr[start:end],
+                fwd_arr[start:end]
+            )
+    
+    return ic_array
 
 
 @dataclass
@@ -99,10 +180,10 @@ class FactorEvaluator:
             fwd = fwd_returns[h]
             aligned_factor, aligned_fwd = self._align(factor, fwd, universe_mask)
             
-            # 计算 IC
-            ic_series = aligned_factor.groupby(level="date").corr(aligned_fwd, method="spearman")
-            rank_ic_mean = ic_series.mean()
-            ic_std = ic_series.std()
+            # 计算 IC（使用 numba 优化）
+            ic_array = self._compute_ic_optimized(aligned_factor, aligned_fwd)
+            rank_ic_mean = np.nanmean(ic_array)
+            ic_std = np.nanstd(ic_array)
             icir = rank_ic_mean / ic_std if ic_std and not np.isnan(ic_std) else np.nan
             
             # 计算换手率（简化版，更快）
@@ -132,6 +213,46 @@ class FactorEvaluator:
         if universe_mask is not None:
             joined = joined[universe_mask.reindex(joined.index).fillna(False)]
         return joined["factor"], joined["fwd"]
+
+    def _compute_ic_optimized(self, factor: pd.Series, fwd: pd.Series) -> np.ndarray:
+        """使用 numba 优化的 IC 计算
+        
+        Args:
+            factor: 因子值 Series
+            fwd: 前瞻收益 Series
+            
+        Returns:
+            每个日期的 IC 数组
+        """
+        # 准备数据：按日期和代码排序
+        df = pd.DataFrame({"factor": factor, "fwd": fwd})
+        df = df.sort_index(level=["date", "code"])
+        
+        # 获取唯一日期
+        dates = df.index.get_level_values("date").unique()
+        n_dates = len(dates)
+        
+        # 构建每个日期的起始和结束索引
+        date_starts = np.empty(n_dates, dtype=np.int64)
+        date_ends = np.empty(n_dates, dtype=np.int64)
+        
+        pos = 0
+        for i, date in enumerate(dates):
+            # 计算该日期的数据量
+            count = (df.index.get_level_values("date") == date).sum()
+            date_starts[i] = pos
+            date_ends[i] = pos + count
+            pos += count
+        
+        # 调用 numba 优化的批量 IC 计算
+        ic_array = _compute_ic_batch(
+            df["factor"].values,
+            df["fwd"].values,
+            date_starts,
+            date_ends
+        )
+        
+        return ic_array
 
     def _turnover(self, factor: pd.Series) -> float:
         """计算因子的平均换手率（原始版本，较慢）。
