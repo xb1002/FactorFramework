@@ -89,6 +89,54 @@ def _compute_ic_batch(factor_arr, fwd_arr, date_starts, date_ends):
     return ic_array
 
 
+@jit(nopython=True, cache=True)
+def _compute_turnover_numba(top_codes_matrix, n_top):
+    """使用 numba 优化的换手率计算
+    
+    Args:
+        top_codes_matrix: shape (n_dates, n_top) 每日前 N 名股票代码（整数编码）
+        n_top: 前 N 名数量
+        
+    Returns:
+        平均换手率
+    """
+    n_dates = top_codes_matrix.shape[0]
+    if n_dates < 2:
+        return np.nan
+    
+    turnovers = np.empty(n_dates - 1, dtype=np.float64)
+    
+    for i in range(n_dates - 1):
+        # 使用排序后的二路归并算法计算交集
+        current = np.sort(top_codes_matrix[i])
+        next_day = np.sort(top_codes_matrix[i + 1])
+        
+        # 双指针计算交集大小
+        overlap = 0
+        j = 0
+        k = 0
+        
+        while j < len(current) and k < len(next_day):
+            if current[j] == -1:  # 填充值
+                break
+            if next_day[k] == -1:
+                break
+                
+            if current[j] == next_day[k]:
+                overlap += 1
+                j += 1
+                k += 1
+            elif current[j] < next_day[k]:
+                j += 1
+            else:
+                k += 1
+        
+        turnover = 1.0 - overlap / n_top if n_top > 0 else 0.0
+        turnovers[i] = turnover
+    
+    return np.mean(turnovers)
+
+
 @dataclass
 class HorizonMetrics:
     """单个时间窗口的评价指标。
@@ -191,7 +239,7 @@ class FactorEvaluator:
             turnover_adj = self._turnover_fast(aligned_factor) / h
             
             metrics[h] = HorizonMetrics(rank_ic_mean, icir, turnover_adj)
-            print(f"✓ IC={rank_ic_mean:.4f}, ICIR={icir:.4f}")
+            print(f"✓ IC={rank_ic_mean:.4f}, ICIR={icir:.4f}, 换手={turnover_adj:.4f}")
             
         best_horizon = self._best_horizon(metrics)
         return FactorReport(factor.name, metrics, best_horizon)
@@ -279,9 +327,9 @@ class FactorEvaluator:
         return float(np.nanmean(turnovers)) if turnovers else np.nan
     
     def _turnover_fast(self, factor: pd.Series) -> float:
-        """计算因子的平均换手率（优化版本，更快）。
+        """计算因子的平均换手率（numba 优化版本）。
         
-        使用向量化操作计算换手率，适合大数据集。
+        使用 numba JIT 加速换手率计算。
         采样前20%的股票计算换手率。
         
         Args:
@@ -291,29 +339,38 @@ class FactorEvaluator:
             平均换手率（0-1 之间）
         """
         # 按日期分组
-        grouped = factor.groupby(level="date")
-        dates = sorted(factor.index.get_level_values(0).unique())
+        dates = sorted(factor.index.get_level_values("date").unique())
         
         if len(dates) < 2:
             return np.nan
         
-        turnovers = []
-        previous_top = None
+        # 为每个日期找出前 20% 的股票
+        grouped = factor.groupby(level="date")
+        n_top = None
         
-        # 只取前20%作为换手率计算（大幅加速）
+        # 收集每日前 N 名股票代码（转为整数编码）
+        all_codes = factor.index.get_level_values("code").unique()
+        code_to_int = {code: i for i, code in enumerate(all_codes)}
+        
+        top_codes_list = []
         for date in dates:
             date_data = grouped.get_group(date).sort_values(ascending=False)
-            n_top = max(1, int(len(date_data) * 0.2))
-            current_top = set(date_data.head(n_top).index.get_level_values(1))
+            if n_top is None:
+                n_top = max(1, int(len(date_data) * 0.2))
             
-            if previous_top is not None:
-                overlap = len(previous_top & current_top)
-                turnover = 1 - overlap / n_top if n_top > 0 else 0
-                turnovers.append(turnover)
+            top_codes = date_data.head(n_top).index.get_level_values("code")
+            top_codes_int = np.array([code_to_int[code] for code in top_codes], dtype=np.int64)
             
-            previous_top = current_top
+            # 填充到固定长度
+            if len(top_codes_int) < n_top:
+                top_codes_int = np.pad(top_codes_int, (0, n_top - len(top_codes_int)), constant_values=-1)
+            
+            top_codes_list.append(top_codes_int)
         
-        return float(np.mean(turnovers)) if turnovers else np.nan
+        top_codes_matrix = np.array(top_codes_list, dtype=np.int64)
+        
+        # 调用 numba 优化的函数
+        return float(_compute_turnover_numba(top_codes_matrix, n_top))
 
     def _best_horizon(self, metrics: Dict[int, HorizonMetrics]) -> Optional[int]:
         """选择最佳时间窗口。
